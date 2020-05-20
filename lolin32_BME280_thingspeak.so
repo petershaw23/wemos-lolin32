@@ -1,0 +1,148 @@
+#include <WiFi.h>
+#include <Wire.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_bme280.h>
+
+#define SEALEVELPRESSURE_HPA (1013.25)
+
+Adafruit_bme280 bme; // I2C
+
+// Replace with your network credentials
+const char* ssid     = "XXX";
+const char* password = "12345678";
+
+const char* server = "api.thingspeak.com";
+String apiKey = "XXXX";
+
+const char* wl_status_to_string(wl_status_t status) {
+  switch (status) {
+    case WL_NO_SHIELD: return "WL_NO_SHIELD";
+    case WL_IDLE_STATUS: return "WL_IDLE_STATUS";
+    case WL_NO_SSID_AVAIL: return "WL_NO_SSID_AVAIL";
+    case WL_SCAN_COMPLETED: return "WL_SCAN_COMPLETED";
+    case WL_CONNECTED: return "WiFi connected";
+    case WL_CONNECT_FAILED: return "WL_CONNECT_FAILED";
+    case WL_CONNECTION_LOST: return "WL_CONNECTION_LOST";
+    case WL_DISCONNECTED: return "WL_DISCONNECTED";
+  }
+}
+
+// deep sleep setup:
+#define uS_TO_S_FACTOR 1000000ULL  /* Conversion factor for micro seconds to seconds */
+#define TIME_TO_SLEEP  20        /* Time ESP32 will go to sleep (in seconds) */
+
+RTC_DATA_ATTR int bootCount = 0;
+
+void print_wakeup_reason(){
+  esp_sleep_wakeup_cause_t wakeup_reason;
+
+  wakeup_reason = esp_sleep_get_wakeup_cause();
+
+  switch(wakeup_reason)
+  {
+    case ESP_SLEEP_WAKEUP_EXT0 : Serial.println("Wakeup caused by external signal using RTC_IO"); break;
+    case ESP_SLEEP_WAKEUP_EXT1 : Serial.println("Wakeup caused by external signal using RTC_CNTL"); break;
+    case ESP_SLEEP_WAKEUP_TIMER : Serial.println("Wakeup caused by timer"); break;
+    case ESP_SLEEP_WAKEUP_TOUCHPAD : Serial.println("Wakeup caused by touchpad"); break;
+    case ESP_SLEEP_WAKEUP_ULP : Serial.println("Wakeup caused by ULP program"); break;
+    default : Serial.printf("Wakeup was not caused by deep sleep: %d\n",wakeup_reason); break;
+  }
+}
+
+
+
+void setup() {
+
+  Serial.begin(115200);
+  bool status;
+  delay(1000); //Take some time to open up the Serial Monitor
+
+  //Increment boot number and print it every reboot
+  ++bootCount;
+  Serial.println("Boot number: " + String(bootCount));
+
+  //Print the wakeup reason for ESP32
+  print_wakeup_reason();
+
+
+
+  if (!bme.begin(0x76)) {
+    Serial.println("Could not find a valid bme280 sensor, check wiring!");
+    while (1);
+  }
+
+  // Connect to Wi-Fi network with SSID and password
+  Serial.print("Connecting to ");
+  Serial.println(ssid);
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  // Print local IP address
+  Serial.println("");
+  Serial.println("WiFi connected.");
+  Serial.println("IP address: ");
+  Serial.println(WiFi.localIP());
+
+  double Temp = bme.readTemperature();
+  double Pressure = bme.readPressure();
+  double Humidity = bme.readHumidity();
+  
+  Serial.println(Temp);        
+  Serial.println(Pressure);
+  Serial.println(Humidity);
+
+  
+  // write data to thingspeak
+ WiFiClient client;
+
+  const int httpPort = 80;
+
+  if (!client.connect(server, httpPort)) {
+    Serial.println("connection failed");
+    return;
+  }
+  else
+  {
+    String data_to_send = apiKey;
+    data_to_send += "&field3=";
+    data_to_send += String(Temp);
+    data_to_send += "&field5=";
+    data_to_send += String(Humidity);
+    data_to_send += "&field7=";
+    data_to_send += String(Pressure);
+    data_to_send += "\r\n\r\n\r\n";
+
+    client.print("POST /update HTTP/1.1\n");
+    client.print("Host: api.thingspeak.com\n");
+    client.print("Connection: close\n");
+    client.print("X-THINGSPEAKAPIKEY: " + apiKey + "\n");
+    client.print("Content-Type: application/x-www-form-urlencoded\n");
+    client.print("Content-Length: ");
+    client.print(data_to_send.length());
+    client.print("\n\n");
+    client.print(data_to_send);
+
+    delay(1000);
+  }
+
+  client.stop();
+  
+  /*
+  First we configure the wake up source
+  We set our ESP32 to wake up every X seconds
+  */
+  esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR);
+  Serial.println("Setup ESP32 to sleep for every " + String(TIME_TO_SLEEP) +
+  " Seconds");
+
+  Serial.println("Going to sleep now");
+  Serial.flush(); 
+  esp_deep_sleep_start();
+  Serial.println("This will never be printed");
+}
+
+void loop(){
+  //This is not going to be called. then why is it here? noone knows... maybe to use up memory? that could be the case! lel.
+}
